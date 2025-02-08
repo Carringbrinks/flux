@@ -9,9 +9,9 @@ from einops import rearrange
 from PIL import ExifTags, Image
 from transformers import pipeline
 
-from flux.cli import SamplingOptions
-from flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
-from flux.util import configs, embed_watermark, load_ae, load_clip, load_flow_model, load_t5
+from src.flux.cli import SamplingOptions
+from src.flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
+from src.flux.util import configs, embed_watermark, load_ae, load_clip, load_flow_model, load_t5
 
 NSFW_THRESHOLD = 0.85
 
@@ -21,7 +21,7 @@ def get_models(name: str, device: torch.device, offload: bool, is_schnell: bool)
     clip = load_clip(device)
     model = load_flow_model(name, device="cpu" if offload else device)
     ae = load_ae(name, device="cpu" if offload else device)
-    nsfw_classifier = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=device)
+    nsfw_classifier = pipeline("image-classification", model="/home/scb123/huggingface_weight/Falconsai-nsfw_image_detection", device=device)
     return model, ae, t5, clip, nsfw_classifier
 
 
@@ -91,11 +91,13 @@ class FluxGenerator:
             dtype=torch.bfloat16,
             seed=opts.seed,
         )
+        print("get_nosie========>:", x.shape)
         timesteps = get_schedule(
             opts.num_steps,
             x.shape[-1] * x.shape[-2] // 4,
             shift=(not self.is_schnell),
         )
+        print("timesteps======>", timesteps)
         if init_image is not None:
             t_idx = int((1 - image2image_strength) * num_steps)
             t = timesteps[t_idx]
@@ -106,6 +108,9 @@ class FluxGenerator:
             self.t5, self.clip = self.t5.to(self.device), self.clip.to(self.device)
         inp = prepare(t5=self.t5, clip=self.clip, img=x, prompt=opts.prompt)
 
+        for key, value in inp.items():
+            print(f"inp的{key}对应值的维度{value.shape}")
+
         # offload TEs to CPU, load model to gpu
         if self.offload:
             self.t5, self.clip = self.t5.cpu(), self.clip.cpu()
@@ -114,6 +119,7 @@ class FluxGenerator:
 
         # denoise initial noise
         x = denoise(self.model, **inp, timesteps=timesteps, guidance=opts.guidance)
+        print("denoise x=======>:", x.shape)
 
         # offload model, load autoencoder to gpu
         if self.offload:
@@ -123,8 +129,10 @@ class FluxGenerator:
 
         # decode latents to pixel space
         x = unpack(x.float(), opts.height, opts.width)
+        print("unpack x==========>:", x.shape)
         with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
             x = self.ae.decode(x)
+            print("ae.decode========>:", x.shape)
 
         if self.offload:
             self.ae.decoder.cpu()
@@ -181,7 +189,7 @@ def create_demo(
                     0.0, 1.0, 0.8, step=0.1, label="Noising strength", visible=False
                 )
 
-                with gr.Accordion("Advanced Options", open=False):
+                with gr.Accordion("Advanced Options", open=True):
                     width = gr.Slider(128, 8192, 1360, step=16, label="Width")
                     height = gr.Slider(128, 8192, 768, step=16, label="Height")
                     num_steps = gr.Slider(1, 50, 4 if is_schnell else 50, step=1, label="Number of steps")
@@ -238,8 +246,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use"
     )
-    parser.add_argument("--offload", action="store_true", help="Offload model to CPU when not in use")
-    parser.add_argument("--share", action="store_true", help="Create a public link to your demo")
+    parser.add_argument("--offload", action="store_true", default=True, help="Offload model to CPU when not in use")
+    parser.add_argument("--share", action="store_true", default=True, help="Create a public link to your demo")
     args = parser.parse_args()
 
     demo = create_demo(args.name, args.device, args.offload)

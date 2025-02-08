@@ -5,7 +5,8 @@ from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokeniz
 class HFEmbedder(nn.Module):
     def __init__(self, version: str, max_length: int, **hf_kwargs):
         super().__init__()
-        self.is_clip = version.startswith("openai")
+        # self.is_clip = version.startswith("openai")
+        self.is_clip = version.endswith("text_encoder")
         self.max_length = max_length
         self.output_key = "pooler_output" if self.is_clip else "last_hidden_state"
 
